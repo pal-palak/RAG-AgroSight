@@ -49,3 +49,7 @@ eval_results_*.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Documentation and study guides
+*.md
+!README.md
