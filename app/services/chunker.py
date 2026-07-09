@@ -52,7 +52,9 @@ class ChunkResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        self.chunk_hash = sha256_of_text(self.text)
+        # Include chunk_index to ensure uniqueness even with identical overlapping text
+        hash_input = f"{self.text}|{self.source_file}|{self.chunk_index}"
+        self.chunk_hash = sha256_of_text(hash_input)
 
 
 # ---------------------------------------------------------------------------

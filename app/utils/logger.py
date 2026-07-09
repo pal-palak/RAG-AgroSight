@@ -4,6 +4,7 @@ Import `logger` everywhere instead of calling logging.getLogger().
 """
 
 import sys
+from pathlib import Path
 
 from loguru import logger
 
@@ -25,6 +26,11 @@ def configure_logger() -> None:
             "<level>{message}</level>"
         ),
     )
+    
+    # Ensure logs directory exists
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
     logger.add(
         "logs/agrosight.log",
         level="DEBUG",

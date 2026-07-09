@@ -179,6 +179,7 @@ body::before {
 .current-info {
     display: flex;
     gap: 20px;
+    padding-bottom: 10px;
 }
 
 .info-item {

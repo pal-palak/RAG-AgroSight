@@ -1,6 +1,15 @@
 """
 AgroSight – Centralised application configuration.
-All values are loaded from environment variables (via .env).
+All values are loaded from environment variables (via .env or secrets backend).
+
+Security:
+  - Use .env.example as template
+  - Never commit .env to git (.gitignore enforces this)
+  - For production, use secrets backend:
+    - SECRETS_BACKEND=aws   (AWS Secrets Manager)
+    - SECRETS_BACKEND=vault (HashiCorp Vault)
+    - SECRETS_BACKEND=azure (Azure Key Vault)
+    - SECRETS_BACKEND=env   (Default: environment variables)
 """
 
 from __future__ import annotations
@@ -28,16 +37,20 @@ class Settings(BaseSettings):
     request_timeout: int = 30
     max_agent_iterations: int = 6
 
+    # ── Secrets Backend ────────────────────────────────────────────────────
+    # Options: "env", "aws", "vault", "azure"
+    secrets_backend: str = "env"
+
     # ── LLM (Mistral API) ─────────────────────────────────────────────────
-    mistral_api_key: str = Field(..., env="MISTRAL_API_KEY")
+    mistral_api_key: str = ""
     mistral_model: str = "mistral-large-latest"
     llm_temperature: float = 0.2
     llm_max_tokens: int = 4096
 
     # ── Qdrant ────────────────────────────────────────────────────────────
-    qdrant_url: str = Field(..., env="QDRANT_URL")
-    qdrant_api_key: str = Field(..., env="QDRANT_API_KEY")
-    qdrant_collection: str = "agricultural_knowledge_v2"
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
+    qdrant_collection: str = "agricultural_knowledge_v8"
 
     # ── Embedding ─────────────────────────────────────────────────────────
     embedding_model: str = "BAAI/bge-m3"
@@ -91,9 +104,30 @@ class Settings(BaseSettings):
     @classmethod
     def normalise_log_level(cls, v: str) -> str:
         return v.upper()
+    
+    def validate_secrets(self) -> bool:
+        """
+        Validate that all required secrets are set.
+        Called during application startup.
+        """
+        required = {
+            "mistral_api_key": self.mistral_api_key,
+            "qdrant_url": self.qdrant_url,
+            "qdrant_api_key": self.qdrant_api_key,
+        }
+        
+        missing = [k for k, v in required.items() if not v]
+        if missing:
+            raise ValueError(
+                f"Missing required configuration: {', '.join(missing)}. "
+                f"Set them in .env file or via environment variables."
+            )
+        return True
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return a cached singleton Settings instance."""
-    return Settings()
+    """Return a cached singleton Settings instance with validation."""
+    settings = Settings()
+    settings.validate_secrets()
+    return settings

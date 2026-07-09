@@ -36,6 +36,24 @@ configure_logger()
 settings = get_settings()
 
 # ---------------------------------------------------------------------------
+# Startup validation
+# ---------------------------------------------------------------------------
+
+def _validate_secrets_on_startup():
+    """Validate all required secrets are configured before startup."""
+    try:
+        settings.validate_secrets()
+        logger.success("✓ All required secrets validated")
+    except ValueError as e:
+        logger.critical(f"❌ Secrets validation failed: {e}")
+        logger.warning("Please configure required secrets in .env or via environment variables")
+        logger.warning("See SECRETS_MANAGEMENT.md for setup instructions")
+        raise
+
+_validate_secrets_on_startup()
+
+
+# ---------------------------------------------------------------------------
 # App factory (with lifespan)
 # ---------------------------------------------------------------------------
 

@@ -13,7 +13,9 @@ calls when it decides tool use is needed.
 from __future__ import annotations
 
 import asyncio
+import csv
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -158,8 +160,92 @@ def _generate_advisory(
 
 
 # ---------------------------------------------------------------------------
-# Tool 2 – Mandi price lookup
+# Tool 2 – Mandi price lookup with CSV fallback
 # ---------------------------------------------------------------------------
+
+async def _fetch_from_csv_fallback(
+    commodity: str, market: str, state: str
+) -> dict[str, Any] | None:
+    """
+    Fallback to local CSV data when APIs are unavailable.
+    Searches mandi_data/mandi_prices_YYYY-MM-DD.csv for matching records.
+    Returns the most recent matching record or None if not found.
+    """
+    try:
+        # Find the most recent CSV file in mandi_data/
+        mandi_dir = Path("./mandi_data")
+        if not mandi_dir.exists():
+            logger.debug("mandi_data directory not found")
+            return None
+
+        csv_files = sorted(mandi_dir.glob("mandi_prices_*.csv"), reverse=True)
+        if not csv_files:
+            logger.debug("No mandi price CSV files found")
+            return None
+
+        csv_path = csv_files[0]
+        logger.debug(f"Using CSV fallback: {csv_path.name}")
+
+        commodity_lower = commodity.lower().strip()
+        market_lower = market.lower().strip() if market else ""
+        state_lower = state.lower().strip() if state else "gujaratgujaratgujarat"
+
+        with open(csv_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            matching_records = []
+
+            for row in reader:
+                # Case-insensitive matching
+                row_commodity = row.get("commodity", "").lower().strip()
+                row_market = row.get("market", "").lower().strip()
+                row_state = row.get("state", "").lower().strip()
+
+                # Match commodity (required)
+                if commodity_lower not in row_commodity and row_commodity not in commodity_lower:
+                    continue
+
+                # Match state (required)
+                if state_lower != row_state and state_lower not in row_state and row_state not in state_lower:
+                    continue
+
+                # Match market (optional, but prefer exact match)
+                if market_lower:
+                    if market_lower not in row_market and row_market not in market_lower:
+                        continue
+
+                matching_records.append(row)
+
+        if not matching_records:
+            logger.debug(f"No CSV records found for {commodity}/{market or 'any'}/{state}")
+            return None
+
+        # Return the first (most recent, since CSV is sorted by date)
+        latest = matching_records[0]
+        arrival = latest.get("arrival_date", "")
+        csv_date = csv_path.name.replace("mandi_prices_", "").replace(".csv", "")
+
+        return {
+            "commodity": latest.get("commodity", commodity),
+            "market": latest.get("market", market),
+            "state": latest.get("state", state),
+            "variety": latest.get("variety"),
+            "grade": latest.get("grade"),
+            "modal_price_inr": float(latest["modal_price"]) if latest.get("modal_price") else None,
+            "min_price_inr": float(latest["min_price"]) if latest.get("min_price") else None,
+            "max_price_inr": float(latest["max_price"]) if latest.get("max_price") else None,
+            "arrival_date": arrival,
+            "data_lag_note": (
+                f"⚠️ CACHED DATA (APIs unavailable): Price data is from {arrival}. "
+                f"CSV data ingested on {csv_date}. Real-time sources (data.gov.in, agmarknet) "
+                f"are currently unreachable. This is historical data, not live market price."
+            ),
+            "source": "Local CSV fallback (APIs unavailable)",
+            "is_fallback": True,
+        }
+
+    except Exception as exc:
+        logger.debug(f"CSV fallback error: {exc}")
+        return None
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
@@ -169,32 +255,57 @@ async def get_mandi_price(commodity: str, market: str = "", state: str = "Gujara
     
     Primary: data.gov.in Agmarknet API
     Secondary: Agmarknet direct API
+    Fallback: Local CSV cache when APIs unavailable
     
     Returns latest price data with source information.
-    Raises exception if all sources fail - no fallback to stale data.
+    Falls back to cached CSV data if both live APIs fail.
     """
     commodity_normalized = commodity.lower().strip()
     market_normalized = market.lower().strip() if market else ""
     state_normalized = state.lower().strip() if state else "Gujarat"
 
+    logger.debug(f"Fetching mandi price for {commodity_normalized} in {market_normalized or 'any market'}, {state_normalized}")
+
     # Try primary source: data.gov.in
-    data_gov_result = await _fetch_from_data_gov_in(
-        commodity_normalized, market_normalized, state_normalized
-    )
-    if data_gov_result:
-        return data_gov_result
+    try:
+        data_gov_result = await _fetch_from_data_gov_in(
+            commodity_normalized, market_normalized, state_normalized
+        )
+        if data_gov_result:
+            return data_gov_result
+    except asyncio.TimeoutError:
+        logger.warning(f"data.gov.in request timed out, trying secondary source")
+    except Exception as exc:
+        logger.warning(f"data.gov.in error: {exc}, trying secondary source")
 
     # Try secondary source: Agmarknet direct API
-    agmarknet_result = await _fetch_from_agmarknet(
-        commodity_normalized, market_normalized, state_normalized
-    )
-    if agmarknet_result:
-        return agmarknet_result
+    try:
+        agmarknet_result = await _fetch_from_agmarknet(
+            commodity_normalized, market_normalized, state_normalized
+        )
+        if agmarknet_result:
+            return agmarknet_result
+    except asyncio.TimeoutError:
+        logger.warning(f"Agmarknet request timed out, falling back to CSV")
+    except Exception as exc:
+        logger.warning(f"Agmarknet error: {exc}, falling back to CSV")
 
-    # If all sources fail, return error (no fallback)
+    # Try CSV fallback when live APIs fail
+    logger.info("Live APIs unavailable, attempting CSV fallback...")
+    try:
+        csv_result = await _fetch_from_csv_fallback(
+            commodity_normalized, market_normalized, state_normalized
+        )
+        if csv_result:
+            logger.info(f"CSV fallback succeeded for {commodity}/{market or 'any'}/{state}")
+            return csv_result
+    except Exception as exc:
+        logger.warning(f"CSV fallback error: {exc}")
+
+    # If all sources fail (including CSV), return error
     error_msg = (
-        f"Unable to fetch real-time price for {commodity} in {market or 'any market'}, {state}. "
-        f"All price sources are temporarily unavailable. Please try again in a few moments."
+        f"Unable to fetch price for {commodity} in {market or 'any market'}, {state}. "
+        f"All sources unavailable (live APIs down, no cached data found). Please try again later."
     )
     logger.error(error_msg)
     return {
@@ -203,8 +314,9 @@ async def get_mandi_price(commodity: str, market: str = "", state: str = "Gujara
         "market": market,
         "state": state,
         "status": "unavailable",
-        "available_sources": ["data.gov.in", "agmarknet.gov.in"],
+        "available_sources": ["data.gov.in (TIMEOUT)", "agmarknet.gov.in (TIMEOUT)", "local CSV (NOT FOUND)"],
     }
+
 
 
 async def _fetch_from_data_gov_in(
@@ -281,6 +393,10 @@ async def _fetch_from_data_gov_in(
                 "source": "data.gov.in – Current Daily Mandi Price (AGMARKNET)",
             }
         logger.info(f"Resource 1 returned no records for {commodity}/{state}, trying resource 2")
+    except asyncio.TimeoutError:
+        logger.debug(f"data.gov.in resource 1 timeout (>{settings.request_timeout}s) — trying resource 2")
+    except httpx.HTTPStatusError as exc:
+        logger.debug(f"data.gov.in resource 1 HTTP error {exc.response.status_code} — trying resource 2")
     except Exception as exc:
         logger.debug(f"data.gov.in resource 1 error: {exc} — trying resource 2")
 
@@ -332,6 +448,10 @@ async def _fetch_from_data_gov_in(
                 "source": "data.gov.in – Variety-wise Daily Mandi Price (AGMARKNET)",
             }
         logger.info(f"Resource 2 also returned no records for {commodity}/{state}")
+    except asyncio.TimeoutError:
+        logger.debug(f"data.gov.in resource 2 timeout (>{settings.request_timeout}s)")
+    except httpx.HTTPStatusError as exc:
+        logger.debug(f"data.gov.in resource 2 HTTP error {exc.response.status_code}")
     except Exception as exc:
         logger.debug(f"data.gov.in resource 2 error: {exc}")
 
@@ -389,6 +509,12 @@ async def _fetch_from_agmarknet(
             "timestamp": latest.get("timestamp"),
         }
 
+    except asyncio.TimeoutError:
+        logger.debug(f"Agmarknet API timeout (>{settings.request_timeout}s) — all sources exhausted")
+        return None
+    except httpx.HTTPStatusError as exc:
+        logger.debug(f"Agmarknet API HTTP error {exc.response.status_code} — all sources exhausted")
+        return None
     except Exception as exc:
         logger.debug(f"Agmarknet API error: {exc} — all sources exhausted")
         return None

@@ -48,10 +48,6 @@ from app.utils.logger import logger
 
 settings = get_settings()
 
-
-# Fix a Mistral tool-calling conversion bug in langchain_mistralai.
-# The package duplicates tool calls when converting AIMessages to Mistral format,
-# which causes `Duplicate tool call id in assistant message` errors.
 def _patched_convert_message_to_mistral_chat_message(message):
     if isinstance(message, ChatMessage):
         return {"role": message.role, "content": message.content}
@@ -109,9 +105,8 @@ mistral_chat_models._convert_message_to_mistral_chat_message = (
 )
 
 
-# ---------------------------------------------------------------------------
 # LangChain-compatible tool wrappers
-# ---------------------------------------------------------------------------
+
 
 
 @tool
@@ -138,9 +133,9 @@ async def fertiliser_tool(crop: str, area_acres: float, fertiliser: str = "urea"
 TOOLS = [weather_tool, mandi_price_tool, fertiliser_tool]
 
 
-# ---------------------------------------------------------------------------
+
 # LLM
-# ---------------------------------------------------------------------------
+
 
 
 def _get_llm() -> ChatMistralAI:
@@ -152,9 +147,7 @@ def _get_llm() -> ChatMistralAI:
     )
 
 
-# ---------------------------------------------------------------------------
 # Core retrieval pipeline
-# ---------------------------------------------------------------------------
 
 
 def retrieve_context(query: str, filters: dict | None = None) -> list[dict[str, Any]]:

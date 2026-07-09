@@ -48,7 +48,8 @@ COPY scripts/ ./scripts/
 COPY .env.example .env.example
 
 # Create runtime directories
-RUN mkdir -p logs chunks_output data/raw data/books
+RUN mkdir -p logs chunks_output data/raw data/books && \
+    chmod -R 755 logs chunks_output data/raw data/books
 
 # Non-root user for security
 RUN useradd -m -u 1000 agrosight && chown -R agrosight:agrosight /app

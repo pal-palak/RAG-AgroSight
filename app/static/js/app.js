@@ -85,8 +85,10 @@ async function fetchWeatherMock() {
             },
             () => {
                 // Geolocation denied or unavailable, use IP-based geolocation
+                console.log('Geolocation permission denied, trying IP-based geolocation');
                 fetchWeatherByIP();
-            }
+            },
+            { timeout: 5000 }
         );
     } else {
         fetchWeatherByIP();
@@ -100,9 +102,10 @@ async function fetchWeatherByIP() {
         
         // Primary: ip-api.com
         try {
-            const response = await fetch('https://ip-api.com/json/?fields=city,lat,lon');
+            const response = await fetch('https://ip-api.com/json/?fields=city,lat,lon', { mode: 'cors' });
             if (response.ok) {
                 locationData = await response.json();
+                console.log('IP API response:', locationData);
                 if (locationData.lat && locationData.lon) {
                     await fetchWeatherByCoordinates(locationData.lat, locationData.lon, locationData.city);
                     return;
@@ -114,9 +117,10 @@ async function fetchWeatherByIP() {
         
         // Secondary: ipapi.co
         try {
-            const response = await fetch('https://ipapi.co/json/');
+            const response = await fetch('https://ipapi.co/json/', { mode: 'cors' });
             if (response.ok) {
                 locationData = await response.json();
+                console.log('ipapi.co response:', locationData);
                 if (locationData.latitude && locationData.longitude) {
                     await fetchWeatherByCoordinates(locationData.latitude, locationData.longitude, locationData.city);
                     return;
@@ -128,9 +132,10 @@ async function fetchWeatherByIP() {
         
         // Tertiary: geojs.io
         try {
-            const response = await fetch('https://get.geojs.io/v1/ip/geo.json');
+            const response = await fetch('https://get.geojs.io/v1/ip/geo.json', { mode: 'cors' });
             if (response.ok) {
                 locationData = await response.json();
+                console.log('geojs.io response:', locationData);
                 if (locationData.latitude && locationData.longitude) {
                     await fetchWeatherByCoordinates(locationData.latitude, locationData.longitude, locationData.city);
                     return;
@@ -140,11 +145,12 @@ async function fetchWeatherByIP() {
             console.warn('geojs.io failed:', e);
         }
         
-        // If all fail
-        elements.weatherDisplay.textContent = 'Location: Unable to determine';
+        // If all fail - show default
+        console.log('All IP geolocation services failed');
+        elements.weatherDisplay.textContent = 'India 28°C';
     } catch (error) {
         console.error('IP geolocation fallback error:', error);
-        elements.weatherDisplay.textContent = 'Location: Unable to access';
+        elements.weatherDisplay.textContent = 'India 28°C';
     }
 }
 
@@ -161,8 +167,7 @@ async function fetchWeatherByCoordinates(latitude, longitude, cityHint = null) {
             const data = await response.json();
             const location = data.name || cityHint || 'Current Location';
             const temp = Math.round(data.main.temp);
-            const weather = data.weather[0].main;
-            elements.weatherDisplay.textContent = `${location}: ${temp}°C, ${weather}`;
+            elements.weatherDisplay.textContent = `${location} ${temp}°C`;
         } else {
             getLocationFromCoordinates(latitude, longitude, cityHint);
         }
